@@ -3,6 +3,7 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -44,7 +45,12 @@ func GetUserLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	tokenIds, err := parseTokenIds(c.Query("token_ids"))
+	if err != nil {
+		common.ApiErrorMsg(c, "invalid token_ids")
+		return
+	}
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId, tokenIds)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -53,6 +59,30 @@ func GetUserLogs(c *gin.Context) {
 	pageInfo.SetItems(logs)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+func parseTokenIds(value string) ([]int, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 100 {
+		return nil, strconv.ErrSyntax
+	}
+	ids := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		id, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || id <= 0 {
+			return nil, strconv.ErrSyntax
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // Deprecated: SearchAllLogs 已废弃，前端未使用该接口。
@@ -148,6 +178,56 @@ func GetLogsSelfStat(c *gin.Context) {
 		},
 	})
 	return
+}
+
+func GetLogsSelfSummary(c *gin.Context) {
+	userId := c.GetInt("id")
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	modelName := c.Query("model_name")
+	group := c.Query("group")
+	tokenIds, err := parseTokenIds(c.Query("token_ids"))
+	if err != nil || len(tokenIds) == 0 {
+		common.ApiErrorMsg(c, "invalid token_ids")
+		return
+	}
+	summary, err := model.GetUserUsageSummary(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	models, err := model.GetUserModelUsage(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"request_count":     summary.RequestCount,
+		"prompt_tokens":     summary.PromptTokens,
+		"completion_tokens": summary.CompletionTokens,
+		"quota":             summary.Quota,
+		"models":            models,
+	})
+}
+
+func GetLogsSelfTrend(c *gin.Context) {
+	userId := c.GetInt("id")
+	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
+	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	modelName := c.Query("model_name")
+	group := c.Query("group")
+	timezone := c.DefaultQuery("timezone", "UTC")
+	tokenIds, err := parseTokenIds(c.Query("token_ids"))
+	if err != nil || len(tokenIds) == 0 || len(timezone) > 64 {
+		common.ApiErrorMsg(c, "invalid trend filters")
+		return
+	}
+	items, err := model.GetUserTokenTrend(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, timezone)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, items)
 }
 
 // DeleteHistoryLogs is the legacy synchronous log cleanup endpoint (DELETE /api/log/).

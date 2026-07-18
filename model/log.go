@@ -561,7 +561,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, tokenIds []int) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -580,6 +580,9 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 	if upstreamRequestId != "" {
 		tx = tx.Where("logs.upstream_request_id = ?", upstreamRequestId)
+	}
+	if len(tokenIds) > 0 {
+		tx = tx.Where("logs.token_id IN ?", tokenIds)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
@@ -613,6 +616,96 @@ type Stat struct {
 	Quota int `json:"quota"`
 	Rpm   int `json:"rpm"`
 	Tpm   int `json:"tpm"`
+}
+
+type UserUsageSummary struct {
+	RequestCount     int64 `json:"request_count"`
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	Quota            int64 `json:"quota"`
+}
+
+type UserModelUsage struct {
+	ModelName    string `json:"model_name"`
+	RequestCount int64  `json:"request_count"`
+	Tokens       int64  `json:"tokens"`
+	Quota        int64  `json:"quota"`
+}
+
+type UserTokenTrend struct {
+	Day        string `json:"day"`
+	Input      int64  `json:"input"`
+	Output     int64  `json:"output"`
+	CacheRead  int64  `json:"cache_read"`
+	CacheWrite int64  `json:"cache_write"`
+}
+
+func GetUserUsageSummary(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (summary UserUsageSummary, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	if err != nil {
+		return summary, err
+	}
+	err = tx.Select(`COUNT(*) AS request_count,
+		COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+		COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+		COALESCE(SUM(quota), 0) AS quota`).Scan(&summary).Error
+	return summary, err
+}
+
+func GetUserModelUsage(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (items []UserModelUsage, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Select(`logs.model_name,
+		COUNT(*) AS request_count,
+		COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS tokens,
+		COALESCE(SUM(quota), 0) AS quota`).
+		Group("logs.model_name").Order("request_count DESC, logs.model_name ASC").Scan(&items).Error
+	return items, err
+}
+
+func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, timezone string) (items []UserTokenTrend, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	if err != nil {
+		return nil, err
+	}
+	otherJSON := `(CASE WHEN logs.other IS NULL OR logs.other = '' THEN '{}'::jsonb ELSE logs.other::jsonb END)`
+	jsonInt := func(field string) string {
+		return "COALESCE((" + otherJSON + " ->> '" + field + "')::bigint, 0)"
+	}
+	cacheRead := jsonInt("cache_tokens")
+	cacheWrite := "CASE WHEN " + jsonInt("cache_write_tokens") + " > 0 THEN " + jsonInt("cache_write_tokens") +
+		" WHEN (" + jsonInt("cache_creation_tokens_5m") + " + " + jsonInt("cache_creation_tokens_1h") + ") > 0 THEN (" + jsonInt("cache_creation_tokens_5m") + " + " + jsonInt("cache_creation_tokens_1h") + ")" +
+		" ELSE " + jsonInt("cache_creation_tokens") + " END"
+	selectSQL := `to_char(to_timestamp(logs.created_at) AT TIME ZONE ?, 'YYYY-MM-DD') AS day,
+		COALESCE(SUM(prompt_tokens), 0) AS input,
+		COALESCE(SUM(completion_tokens), 0) AS output,
+		COALESCE(SUM(` + cacheRead + `), 0) AS cache_read,
+		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write`
+	err = tx.Select(selectSQL, timezone).Group("day").Order("day ASC").Scan(&items).Error
+	return items, err
+}
+
+func userUsageQuery(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (*gorm.DB, error) {
+	tx := LOG_DB.Table("logs").Where("logs.user_id = ? AND logs.type = ?", userId, LogTypeConsume)
+	var err error
+	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
+		return nil, err
+	}
+	if group != "" {
+		tx = tx.Where("logs."+logGroupCol+" = ?", group)
+	}
+	if len(tokenIds) > 0 {
+		tx = tx.Where("logs.token_id IN ?", tokenIds)
+	}
+	if startTimestamp != 0 {
+		tx = tx.Where("logs.created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		tx = tx.Where("logs.created_at <= ?", endTimestamp)
+	}
+	return tx, nil
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
