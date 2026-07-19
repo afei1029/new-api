@@ -1126,6 +1126,22 @@ func decreaseUserQuota(id int, quota int) (err error) {
 	return err
 }
 
+func SetUserQuota(id int, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	if err := DB.Model(&User{}).Where("id = ?", id).Update("quota", quota).Error; err != nil {
+		return err
+	}
+	if err := updateUserQuotaCache(id, quota); err != nil {
+		common.SysLog("failed to update user quota cache after override: " + err.Error())
+		if invalidateErr := invalidateUserCache(id); invalidateErr != nil {
+			common.SysLog("failed to invalidate user cache after quota override: " + invalidateErr.Error())
+		}
+	}
+	return nil
+}
+
 func DeltaUpdateUserQuota(id int, delta int) (err error) {
 	if delta == 0 {
 		return nil
