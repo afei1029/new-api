@@ -61,9 +61,13 @@ const (
 	ErrorCodeChannelResponseTimeExceeded  ErrorCode = "channel:response_time_exceeded"
 
 	// client request error
-	ErrorCodeReadRequestBodyFailed ErrorCode = "read_request_body_failed"
-	ErrorCodeConvertRequestFailed  ErrorCode = "convert_request_failed"
-	ErrorCodeAccessDenied          ErrorCode = "access_denied"
+	ErrorCodeReadRequestBodyFailed  ErrorCode = "read_request_body_failed"
+	ErrorCodeConvertRequestFailed   ErrorCode = "convert_request_failed"
+	ErrorCodeAccessDenied           ErrorCode = "access_denied"
+	ErrorCodeInvalidAPIKey          ErrorCode = "invalid_api_key"
+	ErrorCodeAPIKeyExpired          ErrorCode = "api_key_expired"
+	ErrorCodeAPIKeyDisabled         ErrorCode = "api_key_disabled"
+	ErrorCodeInsufficientTokenQuota ErrorCode = "insufficient_token_quota"
 
 	// request error
 	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"

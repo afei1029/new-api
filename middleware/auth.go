@@ -380,8 +380,8 @@ func TokenAuth() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusInternalServerError,
 					common.TranslateMessage(c, i18n.MsgDatabaseError))
 			} else {
-				abortWithOpenAiMessage(c, http.StatusUnauthorized,
-					common.TranslateMessage(c, i18n.MsgTokenInvalid))
+				message, code := tokenAuthenticationError(token)
+				abortWithOpenAiMessage(c, http.StatusUnauthorized, message, code)
 			}
 			return
 		}
@@ -442,6 +442,28 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		c.Next()
 	}
+}
+
+func tokenAuthenticationError(token *model.Token) (string, types.ErrorCode) {
+	if token == nil {
+		return "Invalid API key", types.ErrorCodeInvalidAPIKey
+	}
+	if token.Status == common.TokenStatusDisabled {
+		return "API key is disabled", types.ErrorCodeAPIKeyDisabled
+	}
+	if token.Status == common.TokenStatusExpired {
+		return "API key has expired", types.ErrorCodeAPIKeyExpired
+	}
+	if token.Status == common.TokenStatusExhausted {
+		return "API key quota has been exhausted", types.ErrorCodeInsufficientTokenQuota
+	}
+	if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
+		return "API key has expired", types.ErrorCodeAPIKeyExpired
+	}
+	if !token.UnlimitedQuota && token.RemainQuota <= 0 {
+		return "API key quota has been exhausted", types.ErrorCodeInsufficientTokenQuota
+	}
+	return "Invalid API key", types.ErrorCodeInvalidAPIKey
 }
 
 func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) error {
