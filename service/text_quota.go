@@ -68,6 +68,30 @@ func cacheWriteTokensTotal(summary textQuotaSummary) int {
 	return summary.CacheCreationTokens
 }
 
+func hasInclusiveOpenAIInputTokens(usage *dto.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	if usage.UsageSource == dto.BillingUsageSourceOAIChat || usage.UsageSource == dto.BillingUsageSourceOAIResponses {
+		return true
+	}
+	if usage.BillingUsage == nil {
+		return false
+	}
+	return usage.BillingUsage.Source == dto.BillingUsageSourceOAIChat || usage.BillingUsage.Source == dto.BillingUsageSourceOAIResponses
+}
+
+func promptTokensForLog(originUsage, billingUsage *dto.Usage, summary textQuotaSummary) (int, bool) {
+	if !hasInclusiveOpenAIInputTokens(originUsage) && !hasInclusiveOpenAIInputTokens(billingUsage) {
+		return summary.PromptTokens, false
+	}
+	promptTokens := summary.PromptTokens - summary.CacheTokens
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	return promptTokens, true
+}
+
 func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) bool {
 	if relayInfo == nil || usage == nil {
 		return false
@@ -356,6 +380,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+	loggedPromptTokens, promptTokensExcludeCache := promptTokensForLog(originUsage, billingUsage, summary)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
@@ -482,6 +507,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// prompt/cache fields here, otherwise old upstream payloads may be double-counted.
 		other["input_tokens_total"] = billingUsage.InputTokens
 	}
+	if promptTokensExcludeCache {
+		// Billing continues to use summary.PromptTokens (the upstream total input).
+		// Only the persisted display/aggregation field excludes cache reads.
+		other["prompt_tokens_excludes_cache"] = true
+	}
 	if tieredBillingApplied {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
@@ -490,7 +520,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
-		PromptTokens:     summary.PromptTokens,
+		PromptTokens:     loggedPromptTokens,
 		CompletionTokens: summary.CompletionTokens,
 		ModelName:        logModel,
 		TokenName:        summary.TokenName,

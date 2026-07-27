@@ -18,6 +18,15 @@ func I18n() gin.HandlerFunc {
 	}
 }
 
+// ForceEnglish keeps gateway API errors stable for SDKs and automation clients.
+// Dashboard APIs continue to use the user's language preference.
+func ForceEnglish() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(string(constant.ContextKeyLanguageOverride), i18n.LangEn)
+		c.Next()
+	}
+}
+
 // detectLanguage determines the language preference for the request
 // Priority: 1. User setting (if logged in) -> 2. Accept-Language header -> 3. Default language
 func detectLanguage(c *gin.Context) string {

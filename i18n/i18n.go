@@ -131,6 +131,12 @@ func GetLangFromContext(c *gin.Context) string {
 	if c == nil {
 		return DefaultLang
 	}
+	if lang := c.GetString(string(constant.ContextKeyLanguageOverride)); lang != "" {
+		normalized := normalizeLang(lang)
+		if IsSupported(normalized) {
+			return normalized
+		}
+	}
 
 	// 1. Try to get language from user settings (if already loaded by TokenAuth or other middleware)
 	if userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting); ok {

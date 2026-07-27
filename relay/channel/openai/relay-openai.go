@@ -184,7 +184,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
-	return usage, nil
+	return normalizeOpenAIChatUsage(usage), nil
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -295,5 +295,5 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
-	return &simpleResponse.Usage, nil
+	return normalizeOpenAIChatUsage(&simpleResponse.Usage), nil
 }

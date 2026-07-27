@@ -41,5 +41,5 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 		}
 	}
 
-	return &usage, nil
+	return normalizeOpenAIResponsesUsage(&usage), nil
 }

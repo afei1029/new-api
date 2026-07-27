@@ -7,6 +7,34 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
 
+func normalizeOpenAITextUsage(usage *dto.Usage, source string) *dto.Usage {
+	if usage == nil {
+		return nil
+	}
+	if usage.InputTokens == 0 && usage.PromptTokens > 0 {
+		usage.InputTokens = usage.PromptTokens
+	}
+	if usage.OutputTokens == 0 && usage.CompletionTokens > 0 {
+		usage.OutputTokens = usage.CompletionTokens
+	}
+	usage.UsageSemantic = dto.BillingUsageSemanticOpenAI
+	usage.UsageSource = source
+	if source == dto.BillingUsageSourceOAIResponses {
+		usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(usage)
+	} else {
+		usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+	}
+	return usage
+}
+
+func normalizeOpenAIChatUsage(usage *dto.Usage) *dto.Usage {
+	return normalizeOpenAITextUsage(usage, dto.BillingUsageSourceOAIChat)
+}
+
+func normalizeOpenAIResponsesUsage(usage *dto.Usage) *dto.Usage {
+	return normalizeOpenAITextUsage(usage, dto.BillingUsageSourceOAIResponses)
+}
+
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {
 	if info == nil || usage == nil {
 		return

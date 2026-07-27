@@ -297,6 +297,91 @@ func TestUsageBillingPathForLog(t *testing.T) {
 	}))
 }
 
+func TestPromptTokensForLogSeparatesOpenAIResponsesWithoutChangingBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			CacheRatio:      0.1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	originUsage := &dto.Usage{
+		PromptTokens:     1000,
+		InputTokens:      1000,
+		CompletionTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 800,
+		},
+	}
+	originUsage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(originUsage)
+	billingUsage := effectiveBillingUsage(originUsage)
+	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+
+	loggedPromptTokens, excludesCache := promptTokensForLog(originUsage, billingUsage, summary)
+
+	require.True(t, excludesCache)
+	require.Equal(t, 200, loggedPromptTokens)
+	require.Equal(t, 1000, summary.PromptTokens)
+	require.Equal(t, 380, summary.Quota)
+	require.NotNil(t, billingUsage.BillingUsage)
+	require.Equal(t, 1000, billingUsage.BillingUsage.OpenAIUsage.PromptTokens)
+}
+
+func TestPromptTokensForLogSeparatesOpenAIChatWithoutChangingBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-4o",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			CacheRatio:      0.1,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		InputTokens:      1000,
+		CompletionTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens: 800,
+		},
+	}
+	usage.BillingUsage = dto.NewOpenAIChatBillingUsage(usage)
+	billingUsage := effectiveBillingUsage(usage)
+	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
+
+	loggedPromptTokens, excludesCache := promptTokensForLog(usage, billingUsage, summary)
+
+	require.True(t, excludesCache)
+	require.Equal(t, 200, loggedPromptTokens)
+	require.Equal(t, 1000, summary.PromptTokens)
+	require.Equal(t, 380, summary.Quota)
+	require.NotNil(t, billingUsage.BillingUsage)
+	require.Equal(t, 1000, billingUsage.BillingUsage.OpenAIUsage.PromptTokens)
+}
+
+func TestPromptTokensForLogClampsResponsesInputAtZero(t *testing.T) {
+	usage := &dto.Usage{PromptTokens: 100}
+	usage.BillingUsage = dto.NewOpenAIResponsesBillingUsage(usage)
+
+	loggedPromptTokens, excludesCache := promptTokensForLog(usage, effectiveBillingUsage(usage), textQuotaSummary{
+		PromptTokens: 100,
+		CacheTokens:  120,
+	})
+
+	require.True(t, excludesCache)
+	require.Zero(t, loggedPromptTokens)
+}
+
 func TestAppendUsageBillingPathForLogWritesAdminInfo(t *testing.T) {
 	other := map[string]interface{}{
 		"admin_info": map[string]interface{}{},
