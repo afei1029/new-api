@@ -204,6 +204,8 @@ func GetLogsSelfSummary(c *gin.Context) {
 		"request_count":     summary.RequestCount,
 		"prompt_tokens":     summary.PromptTokens,
 		"completion_tokens": summary.CompletionTokens,
+		"cache_read":        summary.CacheRead,
+		"cache_write":       summary.CacheWrite,
 		"quota":             summary.Quota,
 		"models":            models,
 	})

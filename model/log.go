@@ -622,6 +622,8 @@ type UserUsageSummary struct {
 	RequestCount     int64 `json:"request_count"`
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
+	CacheRead        int64 `json:"cache_read"`
+	CacheWrite       int64 `json:"cache_write"`
 	Quota            int64 `json:"quota"`
 }
 
@@ -645,9 +647,12 @@ func GetUserUsageSummary(userId int, startTimestamp int64, endTimestamp int64, m
 	if err != nil {
 		return summary, err
 	}
+	input, cacheRead, cacheWrite := userTokenExpressions()
 	err = tx.Select(`COUNT(*) AS request_count,
-		COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+		COALESCE(SUM(` + input + `), 0) AS prompt_tokens,
 		COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+		COALESCE(SUM(` + cacheRead + `), 0) AS cache_read,
+		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write,
 		COALESCE(SUM(quota), 0) AS quota`).Scan(&summary).Error
 	return summary, err
 }
@@ -670,6 +675,17 @@ func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, mod
 	if err != nil {
 		return nil, err
 	}
+	input, cacheRead, cacheWrite := userTokenExpressions()
+	selectSQL := `to_char(to_timestamp(logs.created_at) AT TIME ZONE ?, 'YYYY-MM-DD') AS day,
+		COALESCE(SUM(` + input + `), 0) AS input,
+		COALESCE(SUM(completion_tokens), 0) AS output,
+		COALESCE(SUM(` + cacheRead + `), 0) AS cache_read,
+		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write`
+	err = tx.Select(selectSQL, timezone).Group("day").Order("day ASC").Scan(&items).Error
+	return items, err
+}
+
+func userTokenExpressions() (string, string, string) {
 	otherJSON := `(CASE WHEN logs.other IS NULL OR logs.other = '' THEN '{}'::jsonb ELSE logs.other::jsonb END)`
 	jsonInt := func(field string) string {
 		return "COALESCE((" + otherJSON + " ->> '" + field + "')::bigint, 0)"
@@ -678,13 +694,11 @@ func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, mod
 	cacheWrite := "CASE WHEN " + jsonInt("cache_write_tokens") + " > 0 THEN " + jsonInt("cache_write_tokens") +
 		" WHEN (" + jsonInt("cache_creation_tokens_5m") + " + " + jsonInt("cache_creation_tokens_1h") + ") > 0 THEN (" + jsonInt("cache_creation_tokens_5m") + " + " + jsonInt("cache_creation_tokens_1h") + ")" +
 		" ELSE " + jsonInt("cache_creation_tokens") + " END"
-	selectSQL := `to_char(to_timestamp(logs.created_at) AT TIME ZONE ?, 'YYYY-MM-DD') AS day,
-		COALESCE(SUM(prompt_tokens), 0) AS input,
-		COALESCE(SUM(completion_tokens), 0) AS output,
-		COALESCE(SUM(` + cacheRead + `), 0) AS cache_read,
-		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write`
-	err = tx.Select(selectSQL, timezone).Group("day").Order("day ASC").Scan(&items).Error
-	return items, err
+	promptExcludesCache := "COALESCE((" + otherJSON + " ->> 'prompt_tokens_excludes_cache')::boolean, false)"
+	usageSemantic := "COALESCE(" + otherJSON + " ->> 'usage_semantic', '')"
+	input := "CASE WHEN " + usageSemantic + " = 'anthropic' OR " + promptExcludesCache +
+		" THEN logs.prompt_tokens ELSE GREATEST(logs.prompt_tokens - " + cacheRead + ", 0) END"
+	return input, cacheRead, cacheWrite
 }
 
 func userUsageQuery(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (*gorm.DB, error) {

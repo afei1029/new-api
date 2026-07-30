@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -32,4 +33,16 @@ func TestFormatUserLogsStripsQuotaSaturation(t *testing.T) {
 	require.False(t, hasAdminInfo, "admin_info (and nested quota_saturation) must be stripped for non-admin views")
 	// Non-admin billing fields remain visible.
 	require.Contains(t, parsed, "model_price")
+}
+
+func TestUserTokenExpressionsNormalizeCachedInput(t *testing.T) {
+	input, cacheRead, cacheWrite := userTokenExpressions()
+
+	require.Contains(t, input, "usage_semantic")
+	require.Contains(t, input, "prompt_tokens_excludes_cache")
+	require.Contains(t, input, "GREATEST(logs.prompt_tokens - "+cacheRead+", 0)")
+	require.Contains(t, cacheRead, "cache_tokens")
+	require.True(t, strings.Index(cacheWrite, "cache_write_tokens") < strings.Index(cacheWrite, "cache_creation_tokens_5m"))
+	require.Contains(t, cacheWrite, "cache_creation_tokens_1h")
+	require.Contains(t, cacheWrite, "cache_creation_tokens")
 }
