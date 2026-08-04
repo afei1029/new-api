@@ -65,6 +65,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(fmt.Errorf("failed to copy request to GeneralOpenAIRequest: %w", err), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	captureOpenAIResponsesReasoningEffort(info, request)
 
 	err = helper.ModelMappedHelper(c, info, request)
 	if err != nil {
