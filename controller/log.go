@@ -186,7 +186,7 @@ func GetLogsSelfSummary(c *gin.Context) {
 	modelName := c.Query("model_name")
 	group := c.Query("group")
 	tokenIds, err := parseTokenIds(c.Query("token_ids"))
-	if err != nil || len(tokenIds) == 0 {
+	if err != nil {
 		common.ApiErrorMsg(c, "invalid token_ids")
 		return
 	}
@@ -219,7 +219,7 @@ func GetLogsSelfTrend(c *gin.Context) {
 	group := c.Query("group")
 	timezone := c.DefaultQuery("timezone", "UTC")
 	tokenIds, err := parseTokenIds(c.Query("token_ids"))
-	if err != nil || len(tokenIds) == 0 || len(timezone) > 64 {
+	if err != nil || len(timezone) > 64 {
 		common.ApiErrorMsg(c, "invalid trend filters")
 		return
 	}
