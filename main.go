@@ -206,7 +206,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    ":" + port,
-		Handler: server,
+		Handler: middleware.OpenAIPathCompatibility(server),
 	}
 
 	go func() {
