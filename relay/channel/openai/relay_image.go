@@ -26,6 +26,12 @@ func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
 	if info == nil || !info.PriceData.UsePrice || count <= 0 || count > int64(dto.MaxImageN) {
 		return
 	}
+	// Providers occasionally return more images than requested. The client
+	// must never be charged above the requested n; a smaller successful
+	// response can still reduce the final fixed-price charge.
+	if requested, ok := info.PriceData.OtherRatios()["n"]; ok && requested > 0 && float64(count) > requested {
+		count = int64(requested)
+	}
 	info.PriceData.AddOtherRatio("n", float64(count))
 }
 
@@ -151,8 +157,9 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 	// write) the counter undercounts what upstream actually generated and
 	// charged, so keep the requested n — otherwise a client could pay for one
 	// image by disconnecting right after the first completed event. The abort
-	// guard only blocks lowering the charge: if completed events already
-	// exceed the recorded n, bill the higher actual count regardless.
+	// guard only blocks lowering the charge. updateOpenAIImageCount also caps
+	// completedImages at the requested n so an over-returning provider cannot
+	// increase the user's charge.
 	if info.StreamStatus != nil {
 		upstreamFinished := info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone ||
 			info.StreamStatus.EndReason == relaycommon.StreamEndReasonEOF

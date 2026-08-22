@@ -248,10 +248,10 @@ func TestOpenaiImageStreamHandlerClientDisconnectKeepsRequestedCount(t *testing.
 	require.Equal(t, 3.0, info.PriceData.OtherRatios()["n"], "client abort must not reduce the billed image count")
 }
 
-// TestOpenaiImageStreamHandlerClientDisconnectRaisesCount covers the other
-// direction of the abort guard: when completed events already exceed the
-// recorded n, the higher actual count is billed even though the client aborted.
-func TestOpenaiImageStreamHandlerClientDisconnectRaisesCount(t *testing.T) {
+// TestOpenaiImageStreamHandlerClientDisconnectClampsCount covers the other
+// direction of the abort guard: completed events beyond the requested n must
+// never increase the user's charge, even if the client disconnects.
+func TestOpenaiImageStreamHandlerClientDisconnectClampsCount(t *testing.T) {
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
@@ -279,7 +279,7 @@ func TestOpenaiImageStreamHandlerClientDisconnectRaisesCount(t *testing.T) {
 	require.Contains(t,
 		[]relaycommon.StreamEndReason{relaycommon.StreamEndReasonClientGone, relaycommon.StreamEndReasonHandlerStop},
 		info.StreamStatus.EndReason)
-	require.Equal(t, 2.0, info.PriceData.OtherRatios()["n"], "completed events beyond the recorded n must raise the charge even on abort")
+	require.Equal(t, 1.0, info.PriceData.OtherRatios()["n"], "completed events beyond the requested n must not raise the charge")
 }
 
 // TestOpenaiImageStreamHandlerWrapsJSONResponse covers the non-SSE fallback:
@@ -321,28 +321,39 @@ func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 	longImage := strings.Repeat("a", 4096)
 
 	tests := []struct {
-		name      string
-		body      string
-		usePrice  bool
-		wantCount float64
+		name           string
+		body           string
+		usePrice       bool
+		requestedCount float64
+		wantCount      float64
 	}{
 		{
-			name:      "fixed price uses data length",
-			body:      `{"data":[{"b64_json":"` + longImage + `"},{"b64_json":"second"}]}`,
-			usePrice:  true,
-			wantCount: 2,
+			name:           "fixed price uses data length",
+			body:           `{"data":[{"b64_json":"` + longImage + `"},{"b64_json":"second"}]}`,
+			usePrice:       true,
+			requestedCount: 3,
+			wantCount:      2,
 		},
 		{
-			name:      "empty data keeps requested count",
-			body:      `{"data":[]}`,
-			usePrice:  true,
-			wantCount: 3,
+			name:           "fixed price does not exceed requested count",
+			body:           `{"data":[{"b64_json":"first"},{"b64_json":"second"},{"b64_json":"third"}]}`,
+			usePrice:       true,
+			requestedCount: 2,
+			wantCount:      2,
 		},
 		{
-			name:      "ratio billing ignores data length",
-			body:      `{"data":[{"b64_json":"first"},{"b64_json":"second"}]}`,
-			usePrice:  false,
-			wantCount: 3,
+			name:           "empty data keeps requested count",
+			body:           `{"data":[]}`,
+			usePrice:       true,
+			requestedCount: 3,
+			wantCount:      3,
+		},
+		{
+			name:           "ratio billing ignores data length",
+			body:           `{"data":[{"b64_json":"first"},{"b64_json":"second"}]}`,
+			usePrice:       false,
+			requestedCount: 3,
+			wantCount:      3,
 		},
 	}
 
@@ -350,7 +361,7 @@ func TestOpenaiImageHandlerUsesPositiveActualCountForFixedPrice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c, recorder, resp, info := newImageTestContext(t, tt.body, "application/json", false)
 			info.PriceData.UsePrice = tt.usePrice
-			info.PriceData.AddOtherRatio("n", 3)
+			info.PriceData.AddOtherRatio("n", tt.requestedCount)
 
 			_, err := OpenaiImageHandler(c, info, resp)
 
