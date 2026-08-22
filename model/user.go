@@ -1324,11 +1324,11 @@ func SetUserQuota(id int, quota int) error {
 	if err := DB.Model(&User{}).Where("id = ?", id).Update("quota", quota).Error; err != nil {
 		return err
 	}
-	if err := updateUserQuotaCache(id, quota); err != nil {
-		common.SysLog("failed to update user quota cache after override: " + err.Error())
-		if invalidateErr := invalidateUserCache(id); invalidateErr != nil {
-			common.SysLog("failed to invalidate user cache after quota override: " + invalidateErr.Error())
-		}
+	// Quota is maintained through atomic delta operations. For an absolute
+	// override, invalidate the complete cache so the next read hydrates the
+	// database-authoritative value without allowing a stale snapshot to win.
+	if err := invalidateUserCache(id); err != nil {
+		common.SysLog("failed to invalidate user cache after quota override: " + err.Error())
 	}
 	return nil
 }
