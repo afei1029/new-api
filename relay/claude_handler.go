@@ -106,7 +106,9 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 		info.UpstreamModelName = request.Model
 	}
-	captureClaudeReasoningEffort(info, request)
+	if !model_setting.GetGlobalSettings().PassThroughRequestEnabled && !info.ChannelSetting.PassThroughBodyEnabled {
+		captureClaudeReasoningEffort(info, request)
+	}
 
 	if info.ChannelSetting.SystemPrompt != "" {
 		if request.System == nil {
@@ -227,6 +229,6 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 func captureClaudeReasoningEffort(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) {
 	if effort := request.GetEfforts(); effort != "" {
-		info.ReasoningEffort = effort
+		info.SetReasoningEffort(effort)
 	}
 }
