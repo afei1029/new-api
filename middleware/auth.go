@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
@@ -43,6 +45,9 @@ func validUserInfo(username string, role int) bool {
 }
 
 func authHelper(c *gin.Context, minRole int) {
+	if _, started := c.Get(accessTokenAuditContextKey); !started {
+		defer finishAccessTokenAudit(c)
+	}
 	user, identity, useAccessToken, err := authenticateDashboardRequest(c)
 	if err != nil {
 		writeDashboardAuthError(c, err)
@@ -77,6 +82,9 @@ func authHelper(c *gin.Context, minRole int) {
 
 func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		if _, started := c.Get(accessTokenAuditContextKey); !started {
+			defer finishAccessTokenAudit(c)
+		}
 		user, identity, credentialKind, err := classifyDashboardCredential(c)
 		if err != nil {
 			writeDashboardAuthError(c, err)
@@ -170,6 +178,7 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 	if patUser == nil || patUser.Id <= 0 {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
+	beginAccessTokenAudit(c, patUser, raw)
 	user, err := model.GetUserCache(patUser.Id)
 	if err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
@@ -352,20 +361,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 func TokenAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// 先检测是否为ws
-		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
-			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
-			// read sk from Sec-WebSocket-Protocol
-			key := c.Request.Header.Get("Sec-WebSocket-Protocol")
-			parts := strings.Split(key, ",")
-			for _, part := range parts {
-				part = strings.TrimSpace(part)
-				if strings.HasPrefix(part, "openai-insecure-api-key") {
-					key = strings.TrimPrefix(part, "openai-insecure-api-key.")
-					break
-				}
-			}
-			c.Request.Header.Set("Authorization", "Bearer "+key)
-		}
+		applyWebSocketSubprotocolAuthorization(c.Request.Header)
 		// 检查path包含/v1/messages 或 /v1/models
 		if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {
 			anthropicKey := c.Request.Header.Get("x-api-key")
@@ -431,11 +427,11 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Token has IP restrictions, checking client IP %s", clientIp)
 			ip := net.ParseIP(clientIp)
 			if ip == nil {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "Unable to parse client IP address")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "无法解析客户端 IP 地址")
 				return
 			}
 			if common.IsIpInCIDRList(ip, allowIps) == false {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "Your IP address is not allowed by this API key", types.ErrorCodeAccessDenied)
+				abortWithOpenAiMessage(c, http.StatusForbidden, "您的 IP 不在令牌允许访问的列表中", types.ErrorCodeAccessDenied)
 				return
 			}
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
@@ -461,13 +457,13 @@ func TokenAuth() func(c *gin.Context) {
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
 			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("No permission to access group %s", tokenGroup))
+				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}
 			// check group in common.GroupRatio
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
 				if tokenGroup != "auto" {
-					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("Group %s is no longer available", tokenGroup))
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
 					return
 				}
 			}
@@ -481,6 +477,30 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		c.Next()
 	}
+}
+
+func applyWebSocketSubprotocolAuthorization(header http.Header) bool {
+	key, ok := apiKeyFromWebSocketSubprotocol(strings.Join(header.Values("Sec-WebSocket-Protocol"), ","))
+	if !ok {
+		return false
+	}
+	header.Set("Authorization", "Bearer "+key)
+	return true
+}
+
+func apiKeyFromWebSocketSubprotocol(protocols string) (string, bool) {
+	if protocols == "" {
+		return "", false
+	}
+	const insecureAPIKeyPrefix = "openai-insecure-api-key."
+	for part := range strings.SplitSeq(protocols, ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, insecureAPIKeyPrefix) {
+			key := strings.TrimPrefix(part, insecureAPIKeyPrefix)
+			return key, key != ""
+		}
+	}
+	return "", false
 }
 
 func tokenAuthenticationError(token *model.Token) (string, types.ErrorCode) {
@@ -537,11 +557,21 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
-			c.Set("specific_channel_id", parts[1])
+			id, err := strconv.Atoi(parts[1])
+			if err != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
+				return fmt.Errorf("invalid specific channel id")
+			}
+			service.GetChannelConstraints(c).AddPin(dto.ChannelPin{
+				ChannelId: id,
+				Source:    dto.PinSourceToken,
+				Rank:      dto.PinRankToken,
+				RetryMode: dto.PinRetrySingleAttempt,
+			})
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")
-			abortWithOpenAiMessage(c, http.StatusForbidden, "Regular users cannot specify a channel")
-			return fmt.Errorf("regular users cannot specify a channel")
+			abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
+			return fmt.Errorf("普通用户不支持指定渠道")
 		}
 	}
 	return nil
