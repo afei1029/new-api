@@ -568,12 +568,17 @@ func GetInternalSaaSUsageSummary(c *gin.Context) {
 		internalSaaSError(c, http.StatusBadRequest, "INVALID_TOKEN_IDS", err)
 		return
 	}
-	result, err := model.GetUserUsageSummary(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs)
+	requestIDs, err := parseInternalRequestIds(c.Query("request_ids"))
+	if err != nil {
+		internalSaaSError(c, http.StatusBadRequest, "INVALID_REQUEST_IDS", err)
+		return
+	}
+	result, err := model.GetUserUsageSummary(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs, requestIDs)
 	if err != nil {
 		internalSaaSError(c, http.StatusInternalServerError, "USAGE_SUMMARY_FAILED", err)
 		return
 	}
-	models, err := model.GetUserModelUsage(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs)
+	models, err := model.GetUserModelUsage(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs, requestIDs)
 	if err != nil {
 		internalSaaSError(c, http.StatusInternalServerError, "USAGE_MODEL_FAILED", err)
 		return
@@ -598,12 +603,42 @@ func GetInternalSaaSUsageTrend(c *gin.Context) {
 		internalSaaSError(c, http.StatusBadRequest, "INVALID_TOKEN_IDS", err)
 		return
 	}
-	items, err := model.GetUserTokenTrend(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs, c.Query("timezone"))
+	requestIDs, err := parseInternalRequestIds(c.Query("request_ids"))
+	if err != nil {
+		internalSaaSError(c, http.StatusBadRequest, "INVALID_REQUEST_IDS", err)
+		return
+	}
+	items, err := model.GetUserTokenTrend(user.Id, startTimestamp, endTimestamp, c.Query("model_name"), c.Query("group"), tokenIDs, requestIDs, c.Query("timezone"))
 	if err != nil {
 		internalSaaSError(c, http.StatusInternalServerError, "USAGE_TREND_FAILED", err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": items})
+}
+
+// parseInternalRequestIds parses a comma-separated request ID list (max 100).
+func parseInternalRequestIds(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 100 {
+		return nil, errors.New("too many request ids")
+	}
+	ids := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		id := strings.TrimSpace(part)
+		if id == "" || len(id) > 64 {
+			return nil, errors.New("invalid request id")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func parseInternalTokenIds(value string) ([]int, error) {

@@ -195,12 +195,12 @@ func GetLogsSelfSummary(c *gin.Context) {
 		common.ApiErrorMsg(c, "invalid token_ids")
 		return
 	}
-	summary, err := model.GetUserUsageSummary(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	summary, err := model.GetUserUsageSummary(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, nil)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	models, err := model.GetUserModelUsage(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+	models, err := model.GetUserModelUsage(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, nil)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -228,7 +228,7 @@ func GetLogsSelfTrend(c *gin.Context) {
 		common.ApiErrorMsg(c, "invalid trend filters")
 		return
 	}
-	items, err := model.GetUserTokenTrend(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, timezone)
+	items, err := model.GetUserTokenTrend(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, nil, timezone)
 	if err != nil {
 		common.ApiError(c, err)
 		return

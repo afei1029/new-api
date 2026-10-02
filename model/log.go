@@ -636,10 +636,11 @@ type UserTokenTrend struct {
 	Output     int64  `json:"output"`
 	CacheRead  int64  `json:"cache_read"`
 	CacheWrite int64  `json:"cache_write"`
+	Quota      int64  `json:"quota"`
 }
 
-func GetUserUsageSummary(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (summary UserUsageSummary, err error) {
-	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+func GetUserUsageSummary(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, requestIds []string) (summary UserUsageSummary, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, requestIds)
 	if err != nil {
 		return summary, err
 	}
@@ -653,8 +654,8 @@ func GetUserUsageSummary(userId int, startTimestamp int64, endTimestamp int64, m
 	return summary, err
 }
 
-func GetUserModelUsage(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (items []UserModelUsage, err error) {
-	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+func GetUserModelUsage(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, requestIds []string) (items []UserModelUsage, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, requestIds)
 	if err != nil {
 		return nil, err
 	}
@@ -666,8 +667,8 @@ func GetUserModelUsage(userId int, startTimestamp int64, endTimestamp int64, mod
 	return items, err
 }
 
-func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, timezone string) (items []UserTokenTrend, err error) {
-	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds)
+func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, requestIds []string, timezone string) (items []UserTokenTrend, err error) {
+	tx, err := userUsageQuery(userId, startTimestamp, endTimestamp, modelName, group, tokenIds, requestIds)
 	if err != nil {
 		return nil, err
 	}
@@ -676,7 +677,8 @@ func GetUserTokenTrend(userId int, startTimestamp int64, endTimestamp int64, mod
 		COALESCE(SUM(` + input + `), 0) AS input,
 		COALESCE(SUM(completion_tokens), 0) AS output,
 		COALESCE(SUM(` + cacheRead + `), 0) AS cache_read,
-		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write`
+		COALESCE(SUM(` + cacheWrite + `), 0) AS cache_write,
+		COALESCE(SUM(quota), 0) AS quota`
 	err = tx.Select(selectSQL, timezone).Group("day").Order("day ASC").Scan(&items).Error
 	return items, err
 }
@@ -697,7 +699,10 @@ func userTokenExpressions() (string, string, string) {
 	return input, cacheRead, cacheWrite
 }
 
-func userUsageQuery(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int) (*gorm.DB, error) {
+// requestIds narrows the aggregate to specific relay requests (matched against
+// either the gateway or upstream request ID), letting SaaS attribute shared
+// internal-key usage (e.g. AIGC) to the member who triggered it.
+func userUsageQuery(userId int, startTimestamp int64, endTimestamp int64, modelName string, group string, tokenIds []int, requestIds []string) (*gorm.DB, error) {
 	tx := LOG_DB.Table("logs").Where("logs.user_id = ? AND logs.type = ?", userId, LogTypeConsume)
 	var err error
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -708,6 +713,9 @@ func userUsageQuery(userId int, startTimestamp int64, endTimestamp int64, modelN
 	}
 	if len(tokenIds) > 0 {
 		tx = tx.Where("logs.token_id IN ?", tokenIds)
+	}
+	if len(requestIds) > 0 {
+		tx = tx.Where("(logs.request_id IN ? OR logs.upstream_request_id IN ?)", requestIds, requestIds)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("logs.created_at >= ?", startTimestamp)
