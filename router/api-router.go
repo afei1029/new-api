@@ -21,6 +21,27 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
+		internalSaaSRoute := apiRouter.Group("/internal/saas")
+		internalSaaSRoute.Use(middleware.SaaSInternalAuth(), anonymousRequestBodyLimit)
+		{
+			internalSaaSRoute.POST("/users", controller.EnsureInternalSaaSUser)
+			internalSaaSRoute.PUT("/users/:user_id/status", controller.SetInternalSaaSUserStatus)
+			internalSaaSRoute.GET("/users/:user_id/groups", controller.ListInternalSaaSGroups)
+			internalSaaSRoute.GET("/users/:user_id/api-keys", controller.ListInternalSaaSTokens)
+			internalSaaSRoute.POST("/users/:user_id/api-keys", controller.CreateInternalSaaSToken)
+			internalSaaSRoute.POST("/users/:user_id/api-keys/batch-delete", controller.DeleteInternalSaaSTokens)
+			internalSaaSRoute.GET("/users/:user_id/api-keys/:token_id", controller.GetInternalSaaSToken)
+			internalSaaSRoute.GET("/users/:user_id/api-keys/:token_id/key", controller.GetInternalSaaSTokenKey)
+			internalSaaSRoute.PATCH("/users/:user_id/api-keys/:token_id", controller.UpdateInternalSaaSToken)
+			internalSaaSRoute.DELETE("/users/:user_id/api-keys/:token_id", controller.DeleteInternalSaaSToken)
+			internalSaaSRoute.GET("/users/:user_id/balance", controller.GetInternalSaaSBalance)
+			internalSaaSRoute.POST("/users/:user_id/balance/adjust", controller.AdjustInternalSaaSBalance)
+			internalSaaSRoute.GET("/users/:user_id/usage/logs", controller.ListInternalSaaSUsage)
+			internalSaaSRoute.GET("/users/:user_id/usage/summary", controller.GetInternalSaaSUsageSummary)
+			internalSaaSRoute.GET("/users/:user_id/usage/trend", controller.GetInternalSaaSUsageTrend)
+			internalSaaSRoute.GET("/activity/logs", controller.ListInternalSaaSActivityLogs)
+		}
+
 		apiRouter.GET("/setup", controller.GetSetup)
 		apiRouter.POST("/setup", anonymousRequestBodyLimit, controller.PostSetup)
 		apiRouter.GET("/status", controller.GetStatus)

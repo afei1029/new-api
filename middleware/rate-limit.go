@@ -166,7 +166,16 @@ func GlobalWebRateLimit() func(c *gin.Context) {
 
 func GlobalAPIRateLimit() func(c *gin.Context) {
 	if common.GlobalApiRateLimitEnable {
-		return rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		limiter := rateLimitFactory(common.GlobalApiRateLimitNum, common.GlobalApiRateLimitDuration, "GA")
+		return func(c *gin.Context) {
+			// SaaS customization: the SaaS backend sends every request from one
+			// server IP. Requests carrying the valid service secret are not
+			// counted; missing or wrong secrets are still rate limited.
+			if isSaaSInternalRequest(c) {
+				return
+			}
+			limiter(c)
+		}
 	}
 	return defNext
 }

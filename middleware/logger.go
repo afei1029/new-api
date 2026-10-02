@@ -5,14 +5,27 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/gin-gonic/gin"
 )
 
 const RouteTagKey = "route_tag"
 
+// RouteTagRelay marks model gateway routes (/v1, /v1beta, /mj, /pg, task
+// plugin endpoints, ...).
+const RouteTagRelay = "relay"
+
 func RouteTag(tag string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set(RouteTagKey, tag)
+		// SaaS customization: gateway errors are always English, regardless of
+		// the NewAPI user's language setting or the Accept-Language header.
+		// Every gateway route is tagged "relay", so forcing English here also
+		// covers relay routes added by upstream. Dashboard routes keep i18n.
+		if tag == RouteTagRelay {
+			c.Set(string(constant.ContextKeyLanguageOverride), i18n.LangEn)
+		}
 		c.Next()
 	}
 }

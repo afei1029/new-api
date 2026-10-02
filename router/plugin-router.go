@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -314,6 +315,8 @@ func importPluginDispatchState() gin.HandlerFunc {
 			}
 		}
 		c.Set(middleware.RouteTagKey, "relay")
+		// SaaS customization: plugin gateway routes also return English errors.
+		c.Set(string(constant.ContextKeyLanguageOverride), i18n.LangEn)
 		c.Next()
 	}
 }

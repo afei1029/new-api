@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,10 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
-	"github.com/shopspring/decimal"
 )
 
 type tokenAutoGroupsInput struct {
@@ -40,16 +39,6 @@ type tokenRequest struct {
 type tokenResponse struct {
 	*model.Token
 	AutoGroups []string `json:"auto_groups"`
-}
-
-func maxTokenQuota() int {
-	quota, err := common.WalletQuotaFromDecimalStrict(
-		decimal.NewFromInt(1_000_000_000).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
-	)
-	if err != nil {
-		return common.MaxWalletQuota
-	}
-	return quota
 }
 
 func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
@@ -87,44 +76,46 @@ func getTokenRequestUserGroup(c *gin.Context) (string, error) {
 	return model.GetUserGroup(c.GetInt("id"), false)
 }
 
-func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) bool {
-	if len(groups) == 0 {
-		if err := token.SetAutoGroups(nil); err != nil {
-			common.ApiError(c, err)
-			return false
-		}
-		return true
-	}
+func tokenUserGroupResolver(c *gin.Context) service.TokenUserGroupFunc {
+	return func() (string, error) { return getTokenRequestUserGroup(c) }
+}
 
-	maxCount := setting.GetMaxTokenAutoGroups()
-	if len(groups) > maxCount {
-		common.ApiErrorI18n(c, i18n.MsgTokenAutoGroupsTooMany, map[string]any{"Max": maxCount})
-		return false
-	}
-
-	userGroup, err := getTokenRequestUserGroup(c)
-	if err != nil {
+// renderTokenRuleError keeps the dashboard API response format unchanged.
+func renderTokenRuleError(c *gin.Context, err error) {
+	var ruleErr *service.TokenRuleError
+	if !errors.As(err, &ruleErr) {
 		common.ApiError(c, err)
-		return false
+		return
 	}
-	seen := make(map[string]struct{}, len(groups))
-	for _, group := range groups {
-		if _, ok := seen[group]; ok {
-			common.ApiErrorI18n(c, i18n.MsgTokenAutoGroupsDuplicate, map[string]any{"Group": group})
-			return false
+	switch {
+	case ruleErr.Key != "":
+		if ruleErr.Args != nil {
+			common.ApiErrorI18n(c, ruleErr.Key, ruleErr.Args)
+		} else {
+			common.ApiErrorI18n(c, ruleErr.Key)
 		}
-		seen[group] = struct{}{}
-		if !service.IsUserSelectableGroup(userGroup, group) {
-			common.ApiErrorI18n(c, i18n.MsgTokenAutoGroupsInvalid, map[string]any{"Group": group})
-			return false
-		}
+	case ruleErr.Message != "":
+		common.ApiErrorMsg(c, ruleErr.Message)
+	default:
+		common.ApiError(c, ruleErr)
 	}
+}
 
-	if err := token.SetAutoGroups(groups); err != nil {
-		common.ApiError(c, err)
-		return false
+func tokenMutationInput(request tokenRequest) service.TokenMutationInput {
+	token := request.Token
+	return service.TokenMutationInput{
+		Name:               token.Name,
+		ExpiredTime:        token.ExpiredTime,
+		RemainQuota:        token.RemainQuota,
+		UnlimitedQuota:     token.UnlimitedQuota,
+		ModelLimitsEnabled: token.ModelLimitsEnabled,
+		ModelLimits:        token.ModelLimits,
+		AllowIps:           token.AllowIps,
+		Group:              token.Group,
+		CrossGroupRetry:    token.CrossGroupRetry,
+		AutoGroupsSet:      request.AutoGroups.Set,
+		AutoGroups:         request.AutoGroups.Groups,
 	}
-	return true
 }
 
 func GetAllTokens(c *gin.Context) {
@@ -282,68 +273,12 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token := request.Token
-	if len(token.Name) > 50 {
-		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
-		return
-	}
 	params := tokenAuditParams(c)
-	params["name"] = token.Name
-	// 非无限额度时，检查额度值是否超出有效范围
-	if !token.UnlimitedQuota {
-		if token.RemainQuota < 0 {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
-			return
-		}
-		maxQuotaValue := maxTokenQuota()
-		if token.RemainQuota > maxQuotaValue {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
-			return
-		}
-	}
-	// 检查用户令牌数量是否已达上限
-	maxTokens := operation_setting.GetMaxUserTokens()
-	count, err := model.CountUserTokens(c.GetInt("id"))
+	params["name"] = request.Token.Name
+	cleanToken, err := service.PrepareNewToken(c.GetInt("id"), tokenMutationInput(request), tokenUserGroupResolver(c))
 	if err != nil {
-		common.ApiError(c, err)
+		renderTokenRuleError(c, err)
 		return
-	}
-	if int(count) >= maxTokens {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": fmt.Sprintf("已达到最大令牌数量限制 (%d)", maxTokens),
-		})
-		return
-	}
-	if token.Group == "auto" {
-		if !setTokenAutoGroups(c, &token, request.AutoGroups.Groups) {
-			return
-		}
-	} else {
-		token.CrossGroupRetry = false
-		_ = token.SetAutoGroups(nil)
-	}
-	key, err := common.GenerateKey()
-	if err != nil {
-		common.ApiErrorI18n(c, i18n.MsgTokenGenerateFailed)
-		common.SysLog("failed to generate token key: " + err.Error())
-		return
-	}
-	cleanToken := model.Token{
-		UserId:             c.GetInt("id"),
-		Name:               token.Name,
-		Key:                key,
-		CreatedTime:        common.GetTimestamp(),
-		AccessedTime:       common.GetTimestamp(),
-		ExpiredTime:        token.ExpiredTime,
-		RemainQuota:        token.RemainQuota,
-		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: token.ModelLimitsEnabled,
-		ModelLimits:        token.ModelLimits,
-		AllowIps:           token.AllowIps,
-		Group:              token.Group,
-		CrossGroupRetry:    token.CrossGroupRetry,
-		AutoGroups:         token.AutoGroups,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -395,20 +330,10 @@ func UpdateToken(c *gin.Context) {
 	if token.Id > 0 {
 		params["id"] = token.Id
 	}
-	if len(token.Name) > 50 {
-		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
+	input := tokenMutationInput(request)
+	if err := service.ValidateTokenFieldsUpdate(input); err != nil {
+		renderTokenRuleError(c, err)
 		return
-	}
-	if !token.UnlimitedQuota {
-		if token.RemainQuota < 0 {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
-			return
-		}
-		maxQuotaValue := maxTokenQuota()
-		if token.RemainQuota > maxQuotaValue {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
-			return
-		}
 	}
 	cleanToken, err := model.GetTokenByIds(token.Id, userId)
 	if err != nil {
@@ -417,36 +342,16 @@ func UpdateToken(c *gin.Context) {
 	}
 	params["name"] = cleanToken.Name
 	previous := *cleanToken
-	if token.Status == common.TokenStatusEnabled {
-		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
-			common.ApiErrorI18n(c, i18n.MsgTokenExpiredCannotEnable)
-			return
-		}
-		if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
-			common.ApiErrorI18n(c, i18n.MsgTokenExhaustedCannotEable)
-			return
-		}
+	if err := service.ValidateTokenStatusChange(cleanToken, token.Status); err != nil {
+		renderTokenRuleError(c, err)
+		return
 	}
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
-		// If you add more fields, please also update token.Update()
-		cleanToken.Name = token.Name
-		cleanToken.ExpiredTime = token.ExpiredTime
-		cleanToken.RemainQuota = token.RemainQuota
-		cleanToken.UnlimitedQuota = token.UnlimitedQuota
-		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
-		cleanToken.ModelLimits = token.ModelLimits
-		cleanToken.AllowIps = token.AllowIps
-		cleanToken.Group = token.Group
-		cleanToken.CrossGroupRetry = token.CrossGroupRetry
-		if token.Group != "auto" {
-			cleanToken.CrossGroupRetry = false
-			_ = cleanToken.SetAutoGroups(nil)
-		} else if request.AutoGroups.Set {
-			if !setTokenAutoGroups(c, cleanToken, request.AutoGroups.Groups) {
-				return
-			}
+		if err := service.ApplyTokenUpdate(cleanToken, input, tokenUserGroupResolver(c)); err != nil {
+			renderTokenRuleError(c, err)
+			return
 		}
 	}
 	err = cleanToken.Update()
